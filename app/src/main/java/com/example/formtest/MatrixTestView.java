@@ -1,6 +1,5 @@
 package com.example.formtest;
 
-import android.animation.ObjectAnimator;
 import android.animation.TypeEvaluator;
 import android.animation.ValueAnimator;
 import android.content.Context;
@@ -17,12 +16,10 @@ import android.util.Log;
 import android.util.SparseIntArray;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
-import android.view.VelocityTracker;
+import android.view.ScaleGestureDetector;
 import android.view.View;
-import android.view.ViewConfiguration;
-import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
-import android.widget.Scroller;
+import android.widget.OverScroller;
 
 import androidx.annotation.Nullable;
 
@@ -108,7 +105,7 @@ public class MatrixTestView extends View {
 
         @Override
         public boolean equals(@Nullable Object obj) {
-            if(obj instanceof CellTest){
+            if (obj instanceof CellTest) {
                 CellTest other = (CellTest) obj;
                 return other.row == this.row &&
                         other.column == this.column;
@@ -117,20 +114,54 @@ public class MatrixTestView extends View {
         }
     }
 
+    private class Flinger implements Runnable {
+        float lastX = 0, lastY = 0;
+        private boolean isFirstRun = true;
+
+        @Override
+        public void run() {
+            if (overScroller.computeScrollOffset()) {
+                if (isFirstRun) {
+                    isFirstRun = false;
+                    lastX = overScroller.getCurrX();
+                    lastY = overScroller.getCurrY();
+                }
+                float dx = overScroller.getCurrX() - lastX;
+                float dy = overScroller.getCurrY() - lastY;
+                lastX = overScroller.getCurrX();
+                lastY = overScroller.getCurrY();
+                matrix.postTranslate(dx, dy);
+                postInvalidate();
+                post(this);
+                Log.d(TAG, "run: currentX = " + overScroller.getCurrX());
+            } else {
+                isFirstRun = true;
+            }
+        }
+
+    }
+
     private static final String TAG = "殷宗旺";
     private GestureDetector gestureDetector;
+    private ScaleGestureDetector scaleGestureDetector;
+    private OverScroller overScroller;
+    private Flinger flinger;
     private OnClick onClick;
+    private boolean isFirstDraw = true;
 
     private List<RowTest> rows = new ArrayList<>();
-    private Paint cellBgPaint;
+    private Paint cellBgPaint, numberBgPaint;
     private TextPaint textPaint;
     private float textSize;
-    private int rowMargin = 10;
+    private int rowMargin = 10, rowHeight = 100;
+    private List<RectF> numbers = new ArrayList<>();
+
     private RectF viewRectF, contentRectF;
     private Rect drawRect;
     private Matrix matrix;
     private CellTest focusedCell;
     private ValueAnimator valueAnimator;
+    private float lastClickX = 0, lastClickY = 0;
 
     private float[] m = new float[9];
 
@@ -173,48 +204,25 @@ public class MatrixTestView extends View {
         this.onClick = onClick;
     }
 
-    private void initialValueAnimator(){
-        valueAnimator = new ValueAnimator();
-        valueAnimator.setDuration(500);
-        valueAnimator.setObjectValues(new PointF());
-        valueAnimator.setInterpolator(new DecelerateInterpolator());
-        valueAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-            @Override
-            public void onAnimationUpdate(ValueAnimator animation) {
-                PointF pointF = (PointF) animation.getAnimatedValue();
-                Log.d(TAG, "onAnimationUpdate: dx = "+pointF.x+" dy = "+pointF.y);
-                matrix.postTranslate(pointF.x,pointF.y);
-                invalidate();
-            }
-        });
+    private void firstDraw() {
+        isFirstDraw = false;
+        float totalWidth = rowMargin * 2 + rows.get(0).width;
+        float scale = getWidth() / totalWidth;
+        matrix.setScale(scale, scale);
     }
 
-    private void atuoScroll(final float velocityX, final float velocityY){
-        final float distanceX = (float) Math.sqrt(Math.sqrt(Math.abs(velocityX)));
-        final float distanceY = (float) Math.sqrt(Math.sqrt(Math.abs(velocityY)));
-        valueAnimator.setEvaluator(new TypeEvaluator<PointF>() {
-            @Override
-            public PointF evaluate(float fraction, PointF startValue, PointF endValue) {
-                Log.d(TAG, "evaluate: fraction = "+fraction);
-                PointF pointF = new PointF();
-                float dx =  distanceX - distanceX * fraction;
-                float dy = distanceY - distanceY * fraction;
-                pointF.x = dx * velocityX / Math.abs(velocityX);
-                pointF.y = dy * velocityY / Math.abs(velocityY);
-                return pointF;
-            }
-        });
-        valueAnimator.start();
-    }
 
     private void initial(Context context) {
-        initialValueAnimator();
+        overScroller = new OverScroller(getContext(), new DecelerateInterpolator());
+        flinger = new Flinger();
 
-        final int rowHeight = 100;
         int top = rowMargin, left = rowMargin;
         for (int i = 1; i < 11; i++) {
+            RectF rectF = new RectF(0,top,rowMargin * 2,top+rowHeight);
+            numbers.add(rectF);
+
             RowTest rowTest = new RowTest(i - 1, top, left, rowHeight, 10, 10, new SparseIntArray());
-            top += rowHeight + rowMargin;
+            top += (rowHeight + rowMargin);
             rows.add(rowTest);
         }
 
@@ -233,6 +241,11 @@ public class MatrixTestView extends View {
         cellBgPaint.setAntiAlias(true);
         cellBgPaint.setStrokeWidth(4f);
 
+        numberBgPaint = new Paint();
+        numberBgPaint.setStyle(Paint.Style.FILL);
+        numberBgPaint.setColor(Color.parseColor("#cfcfcf"));
+        numberBgPaint.setAntiAlias(true);
+
         textPaint = new TextPaint();
         textPaint.setTextSize(textSize);
         textPaint.setColor(Color.BLACK);
@@ -242,40 +255,47 @@ public class MatrixTestView extends View {
         gestureDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDown(MotionEvent e) {
-                piovX = e.getX();
-                piovY = e.getY();
-                return true;
+                lastClickX = e.getX();
+                lastClickY = e.getY();
+                return super.onDown(e);
             }
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
-                float dx = e2.getX() - piovX;
-                float dy = e2.getY() - piovY;
-                matrix.postTranslate(dx,dy);
+                float dx = e2.getX() - lastClickX;
+                float dy = e2.getY() - lastClickY;
+                matrix.postTranslate(dx, dy);
                 invalidate();
-                piovX = e2.getX();
-                piovY = e2.getY();
-                return true;
+                lastClickX = e2.getX();
+                lastClickY = e2.getY();
+                return super.onScroll(e1, e2, distanceX, distanceY);
             }
 
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                Log.d(TAG, "onFling: velocityX = "+velocityX);
-                if(Math.abs(velocityX) > 1000 || Math.abs(velocityY) > 1000)
-                    atuoScroll(velocityX,velocityY);
-                return true;
+                if (Math.abs(velocityX) > 1000 || Math.abs(velocityY) > 1000) {
+                    int contentHeight = rowMargin * (rows.size() + 1) + rowHeight * rows.size();
+                    int minX = (int) (getWidth() - rows.get(0).width * getScaleX());
+                    int maxX = (int) (rows.get(0).width * getScaleX());
+                    int minY = getHeight() - contentHeight;
+                    int maxY = contentHeight;
+                    Log.d(TAG, "onFling: maxX = " + maxX);
+                    overScroller.fling((int) e1.getX(), (int) e1.getY(), (int) velocityX, (int) velocityY, minX, maxX, minY, maxY);
+                    new Thread(flinger).start();
+                }
+                return super.onFling(e1, e2, velocityX, velocityY);
             }
 
             @Override
             public boolean onSingleTapUp(MotionEvent e) {
                 RectF rectF = new RectF();
                 for (int i = 0; i < rows.size(); i++) {
-                    matrix.mapRect(rectF,rows.get(i).getRectF());
-                    if (rectF.contains(piovX,piovY)) {
+                    matrix.mapRect(rectF, rows.get(i).getRectF());
+                    if (rectF.contains(lastClickX, lastClickY)) {
                         for (CellTest cellTest : rows.get(i).cells) {
-                            matrix.mapRect(rectF,cellTest.getRectF());
-                            if (rectF.contains(piovX,piovY)) {
-                                if(focusedCell != cellTest)
+                            matrix.mapRect(rectF, cellTest.getRectF());
+                            if (rectF.contains(lastClickX, lastClickY)) {
+                                if (focusedCell != cellTest)
                                     focusedCell = cellTest;
                                 else
                                     focusedCell = null;
@@ -287,7 +307,26 @@ public class MatrixTestView extends View {
                         break;
                     }
                 }
+                return super.onSingleTapUp(e);
+            }
+        });
+
+        scaleGestureDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.OnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                matrix.postScale(detector.getScaleFactor(), detector.getScaleFactor(), detector.getCurrentSpanX(), detector.getCurrentSpanY());
+                invalidate();
                 return true;
+            }
+
+            @Override
+            public boolean onScaleBegin(ScaleGestureDetector detector) {
+                return true;
+            }
+
+            @Override
+            public void onScaleEnd(ScaleGestureDetector detector) {
+
             }
         });
     }
@@ -302,54 +341,73 @@ public class MatrixTestView extends View {
         initial(context);
     }
 
-
-    private int dXProgress = 0, dYProgress = 0, scaleProgress = 50;
-    private float piovX = 0, piovY = 0;
-
-    public void transX(int progress) {
-        float dx = (getWidth() - 200) * (progress - dXProgress) / 100f;
-        dXProgress = progress;
-        matrix.postTranslate(dx, 0);
-        invalidate();
-    }
-
-    public void transY(int progress) {
-        float dy = (getHeight() - 200) * (progress - dYProgress) / 100f;
-        dYProgress = progress;
-        matrix.postTranslate(0, dy);
-        invalidate();
-    }
-
-    public void scale(int progress) {
-        float scale = (progress + 1f) / scaleProgress;
-        scaleProgress = progress + 1;
-        matrix.postScale(scale, scale, piovX, piovY);
-        invalidate();
-    }
-
-    private void drawFocusCell(Canvas canvas){
+    private void drawFocusCell(Canvas canvas) {
         int offset = 20;
-        if(focusedCell!=null){
+        if (focusedCell != null) {
             RectF rowRectF = rows.get(focusedCell.row).getRectF();
             cellBgPaint.setColor(Color.RED);
-            canvas.drawRect(rowRectF,cellBgPaint);
-            RectF cellRectF = new RectF(focusedCell.getRectF().left - offset,focusedCell.getRectF().top - offset,
-                    focusedCell.getRectF().right + offset,focusedCell.getRectF().bottom + offset);
+            canvas.drawRect(rowRectF, cellBgPaint);
+            RectF cellRectF = new RectF(focusedCell.getRectF().left - offset, focusedCell.getRectF().top - offset,
+                    focusedCell.getRectF().right + offset, focusedCell.getRectF().bottom + offset);
             cellBgPaint.setColor(Color.TRANSPARENT);
-            canvas.drawRect(cellRectF,cellBgPaint);
+            canvas.drawRect(cellRectF, cellBgPaint);
             textPaint.setTextSize(textSize * 1.5f);
-            canvas.drawText(focusedCell.value.toString(),cellRectF.centerX(),getBaseLine(cellRectF),textPaint);
+            canvas.drawText(focusedCell.value.toString(), cellRectF.centerX(), getBaseLine(cellRectF), textPaint);
         }
+    }
+
+    private void drawHeader(Canvas canvas){
+        RowTest rowTest = rows.get(0);
+        RectF rectF = getMatrixRectf(rowTest.getRectF());
+        rectF.set(rectF.left,0,rectF.right,50 * getMatrixScaleX());
+        canvas.drawRect(rectF,numberBgPaint);
+        for(int i = 1;i<= rowTest.columnCount;i++){
+            textPaint.setTextSize(textSize * getMatrixScaleX());
+            String s = "第 "+i +" 列";
+            RectF cellRectF = getMatrixRectf(rowTest.getCell(i - 1).rectF);
+            cellRectF.set(cellRectF.left,0,cellRectF.right,50 * getMatrixScaleX());
+            canvas.drawText(s,cellRectF.centerX(),getBaseLine(cellRectF),textPaint);
+        }
+    }
+
+    private void drawRowNumber(Canvas canvas) {
+        int i = 1;
+        for (RectF rectF1:numbers) {
+            RectF rectF = getMatrixRectf(rectF1);
+            rectF.set(0,rectF.top,rowMargin *1.5f* getMatrixScaleX(),rectF.bottom);
+
+            canvas.drawRect(rectF, numberBgPaint);
+            textPaint.setTextSize(textSize * getMatrixScaleX());
+            canvas.drawText(String.valueOf(i++), rectF.centerX(), getBaseLine(rectF), textPaint);
+        }
+//        float top = 0;
+//        float bottom = 0;
+//        float left = 0;
+//        float right =left + rowMargin * 2 * getScaleX();
+//        for(int j = 1;j<=rows.size();j++){
+//            RectF rowRectF =getMatrixRectf(rows.get(j - 1).getRectF());
+//            top = rowRectF.top;
+//            bottom = rowRectF.bottom;
+//
+//            RectF rectF = new RectF(left,top,right,bottom);
+//            canvas.drawRect(rectF, numberBgPaint);
+//
+//            textPaint.setTextSize(textSize * getScaleX());
+//            canvas.drawText(String.valueOf(j), rectF.centerX(), getBaseLine(rectF), textPaint);
+//        }
     }
 
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
+        if (isFirstDraw)
+            firstDraw();
+        canvas.save();
         canvas.concat(matrix);
         for (RowTest rowTest : rows) {
             for (CellTest cellTest : rowTest.cells) {
-                if(cellTest == focusedCell)
+                if (cellTest == focusedCell)
                     continue;
                 cellBgPaint.setColor(Color.BLUE);
                 canvas.drawRect(cellTest.rectF, cellBgPaint);
@@ -358,6 +416,9 @@ public class MatrixTestView extends View {
             }
         }
         drawFocusCell(canvas);
+        canvas.restore();
+        drawRowNumber(canvas);
+        drawHeader(canvas);
     }
 
     @Override
@@ -368,6 +429,10 @@ public class MatrixTestView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         performClick();
-        return gestureDetector.onTouchEvent(event);
+        if (event.getPointerCount() > 1) {
+            return scaleGestureDetector.onTouchEvent(event);
+        }
+        gestureDetector.onTouchEvent(event);
+        return true;
     }
 }
