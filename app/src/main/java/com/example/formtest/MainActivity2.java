@@ -10,7 +10,6 @@ import android.widget.TextView;
 public class MainActivity2 extends AppCompatActivity {
 
     MatrixTestView matrixTestView;
-    SeekBar translateXSB,translateYSB,scaleSB,rotateSB;
     TextView infoTV;
     @Override
     protected void onCreate(Bundle savedInstanceState) {

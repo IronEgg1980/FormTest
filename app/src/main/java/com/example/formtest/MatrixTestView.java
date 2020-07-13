@@ -153,6 +153,14 @@ public class MatrixTestView extends View {
     }
 
     private static final String TAG = "殷宗旺";
+    private String mTitle = "标题";
+    private int mTitleHeight = 200;
+    private RectF mTitleRectF;
+
+    private float mPadding = 100;
+
+    private RectF contentRectF ;
+
     private GestureDetector gestureDetector;
     private ScaleGestureDetector scaleGestureDetector;
     private OverScroller overScroller;
@@ -165,7 +173,6 @@ public class MatrixTestView extends View {
     private TextPaint textPaint;
     private float textSize;
     private int rowMargin = 20, rowHeight = 200, indicatorWidth = 10, cellMargin = 10;
-    private List<RectF> numbers = new ArrayList<>();
 
     private RectF vIndicatorBg, hIndicatorBg, vIndicator, hIndicator;
     private Matrix matrix;
@@ -226,7 +233,10 @@ public class MatrixTestView extends View {
     private void initial(Context context) {
         overScroller = new OverScroller(getContext(), new DecelerateInterpolator());
         flinger = new Flinger();
-        header = new RowTest(-1, 0, rowMargin, rowHeight, 8, 10, new SparseIntArray());
+
+        mTitleRectF = new RectF(0,0,getWidth(),mTitleHeight);
+
+        header = new RowTest(-1,mTitleHeight, rowMargin, rowHeight, 8, 10, new SparseIntArray());
         LocalDate localDate = LocalDate.now().with(DayOfWeek.MONDAY);
         DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("M月d日 eeee", Locale.CHINA);
         for (int i = 1; i < 8; i++) {
@@ -236,9 +246,6 @@ public class MatrixTestView extends View {
 
         int top = rowMargin + header.height, left = rowMargin;
         for (int i = 1; i < 100; i++) {
-            RectF rectF = new RectF(0, top, rowMargin * 2, top + rowHeight);
-            numbers.add(rectF);
-
             RowTest rowTest = new RowTest(i - 1, top, left, rowHeight, 8, cellMargin, new SparseIntArray());
             top += (rowHeight + rowMargin);
             rows.add(rowTest);
