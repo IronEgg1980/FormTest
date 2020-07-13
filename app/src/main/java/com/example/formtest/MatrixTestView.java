@@ -1,13 +1,12 @@
 package com.example.formtest;
 
-import android.animation.TypeEvaluator;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.text.TextPaint;
@@ -23,8 +22,12 @@ import android.widget.OverScroller;
 
 import androidx.annotation.Nullable;
 
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class MatrixTestView extends View {
     public interface OnClick {
@@ -37,7 +40,6 @@ public class MatrixTestView extends View {
         private int defaultCellWidth = 300;
         private int columnCount;
         private CellTest[] cells;
-        private int cellMargin = 10;
         private RectF rectF;
 
         public RectF getRectF() {
@@ -60,7 +62,6 @@ public class MatrixTestView extends View {
             this.row = row;
             this.height = height;
             this.columnCount = columnCount;
-            this.cellMargin = cellMargin;
             this.cells = new CellTest[columnCount];
             width = cellMargin * (columnCount + 1);
             int cellLeft = cellMargin + left;
@@ -71,7 +72,7 @@ public class MatrixTestView extends View {
                 width += cellWidth;
                 cellLeft += cellWidth + cellMargin;
             }
-            rectF = new RectF(left, top, width, top + height);
+            rectF = new RectF(left, top, left + width, top + height);
         }
 
         public CellTest getCell(int index) {
@@ -115,53 +116,63 @@ public class MatrixTestView extends View {
     }
 
     private class Flinger implements Runnable {
-        float lastX = 0, lastY = 0;
-        private boolean isFirstRun = true;
+        int x = 0, y = 0;
+        boolean isFinished = true;
+
+        public void start(MotionEvent e1, float velocityX, float velocityY) {
+            if (isFinished) {
+                RectF firstRectF = getMatrixRectf(rows.get(0).rectF);
+                x = (int) firstRectF.left;
+                y = (int) firstRectF.top;
+                int minX = (int) (getWidth() - contentWidth * getMatrixScaleX());
+                int maxX = (int) (rowMargin * getMatrixScaleX());
+                int minY = (int) (getHeight() - contentHeight * getMatrixScaleY());
+                int maxY = (int) (header.height * getMatrixScaleY());
+                overScroller.fling(x, y, (int) velocityX, (int) velocityY, minX, maxX, minY, maxY, 20, 20);
+            } else {
+                overScroller.abortAnimation();
+            }
+            post(this);
+        }
 
         @Override
         public void run() {
-            if (overScroller.computeScrollOffset()) {
-                if (isFirstRun) {
-                    isFirstRun = false;
-                    lastX = overScroller.getCurrX();
-                    lastY = overScroller.getCurrY();
-                }
-                float dx = overScroller.getCurrX() - lastX;
-                float dy = overScroller.getCurrY() - lastY;
-                lastX = overScroller.getCurrX();
-                lastY = overScroller.getCurrY();
-                matrix.postTranslate(dx, dy);
-                postInvalidate();
-                post(this);
-                Log.d(TAG, "run: currentX = " + overScroller.getCurrX());
-            } else {
-                isFirstRun = true;
+            if (!overScroller.computeScrollOffset()) {
+                isFinished = true;
+                return;
             }
+            isFinished = false;
+            int dx = overScroller.getCurrX() - x;
+            int dy = overScroller.getCurrY() - y;
+            matrix.postTranslate(dx, dy);
+            x = overScroller.getCurrX();
+            y = overScroller.getCurrY();
+            postInvalidate();
+            post(this);
         }
-
     }
 
     private static final String TAG = "殷宗旺";
     private GestureDetector gestureDetector;
     private ScaleGestureDetector scaleGestureDetector;
     private OverScroller overScroller;
-    private Flinger flinger;
     private OnClick onClick;
     private boolean isFirstDraw = true;
 
     private List<RowTest> rows = new ArrayList<>();
+    private RowTest header;
     private Paint cellBgPaint, numberBgPaint;
     private TextPaint textPaint;
     private float textSize;
-    private int rowMargin = 10, rowHeight = 100;
+    private int rowMargin = 20, rowHeight = 200, indicatorWidth = 10, cellMargin = 10;
     private List<RectF> numbers = new ArrayList<>();
 
-    private RectF viewRectF, contentRectF;
-    private Rect drawRect;
+    private RectF vIndicatorBg, hIndicatorBg, vIndicator, hIndicator;
     private Matrix matrix;
     private CellTest focusedCell;
-    private ValueAnimator valueAnimator;
-    private float lastClickX = 0, lastClickY = 0;
+    private Flinger flinger;
+    private float contentWidth = 0, contentHeight = 0, defaultScaleValue = 1f;
+    private float lastClickX, lastClickY;
 
     private float[] m = new float[9];
 
@@ -206,44 +217,53 @@ public class MatrixTestView extends View {
 
     private void firstDraw() {
         isFirstDraw = false;
-        float totalWidth = rowMargin * 2 + rows.get(0).width;
-        float scale = getWidth() / totalWidth;
-        matrix.setScale(scale, scale);
+        float totalWidth = rows.get(0).width + rowMargin * 2;
+        defaultScaleValue = getWidth() / totalWidth;
+        matrix.setScale(defaultScaleValue, defaultScaleValue);
     }
 
 
     private void initial(Context context) {
         overScroller = new OverScroller(getContext(), new DecelerateInterpolator());
         flinger = new Flinger();
+        header = new RowTest(-1, 0, rowMargin, rowHeight, 8, 10, new SparseIntArray());
+        LocalDate localDate = LocalDate.now().with(DayOfWeek.MONDAY);
+        DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("M月d日 eeee", Locale.CHINA);
+        for (int i = 1; i < 8; i++) {
+            header.getCell(i).value = localDate.plusDays(i - 1).format(dateTimeFormatter);
+        }
+        header.getCell(0).value = "姓名";
 
-        int top = rowMargin, left = rowMargin;
-        for (int i = 1; i < 11; i++) {
-            RectF rectF = new RectF(0,top,rowMargin * 2,top+rowHeight);
+        int top = rowMargin + header.height, left = rowMargin;
+        for (int i = 1; i < 100; i++) {
+            RectF rectF = new RectF(0, top, rowMargin * 2, top + rowHeight);
             numbers.add(rectF);
 
-            RowTest rowTest = new RowTest(i - 1, top, left, rowHeight, 10, 10, new SparseIntArray());
+            RowTest rowTest = new RowTest(i - 1, top, left, rowHeight, 8, cellMargin, new SparseIntArray());
             top += (rowHeight + rowMargin);
             rows.add(rowTest);
         }
 
+        contentHeight = rowMargin * (rows.size() + 1) + rows.size() * rowHeight;
+        contentWidth = rowMargin * 2 + rows.get(0).width;
+
         textSize = 30f;
         rowMargin = 20;
 
-        contentRectF = new RectF(400, 100, 600, 300);
-        viewRectF = new RectF(100, 100, 300, 300);
-        drawRect = new Rect();
+        vIndicatorBg = new RectF();
+        hIndicatorBg = new RectF();
+        vIndicator = new RectF();
+        hIndicator = new RectF();
 
         matrix = new Matrix();
 
         cellBgPaint = new Paint();
-        cellBgPaint.setStyle(Paint.Style.STROKE);
-        cellBgPaint.setColor(Color.BLUE);
-        cellBgPaint.setAntiAlias(true);
-        cellBgPaint.setStrokeWidth(4f);
+        cellBgPaint.setStyle(Paint.Style.FILL);
+        cellBgPaint.setColor(Color.WHITE);
 
         numberBgPaint = new Paint();
         numberBgPaint.setStyle(Paint.Style.FILL);
-        numberBgPaint.setColor(Color.parseColor("#cfcfcf"));
+        numberBgPaint.setColor(Color.parseColor("#cfcfcfcf"));
         numberBgPaint.setAntiAlias(true);
 
         textPaint = new TextPaint();
@@ -257,15 +277,14 @@ public class MatrixTestView extends View {
             public boolean onDown(MotionEvent e) {
                 lastClickX = e.getX();
                 lastClickY = e.getY();
-                return super.onDown(e);
+                return true;
             }
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
                 float dx = e2.getX() - lastClickX;
                 float dy = e2.getY() - lastClickY;
-                matrix.postTranslate(dx, dy);
-                invalidate();
+                contraintScoll(dx, dy);
                 lastClickX = e2.getX();
                 lastClickY = e2.getY();
                 return super.onScroll(e1, e2, distanceX, distanceY);
@@ -273,48 +292,31 @@ public class MatrixTestView extends View {
 
             @Override
             public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
-                if (Math.abs(velocityX) > 1000 || Math.abs(velocityY) > 1000) {
-                    int contentHeight = rowMargin * (rows.size() + 1) + rowHeight * rows.size();
-                    int minX = (int) (getWidth() - rows.get(0).width * getScaleX());
-                    int maxX = (int) (rows.get(0).width * getScaleX());
-                    int minY = getHeight() - contentHeight;
-                    int maxY = contentHeight;
-                    Log.d(TAG, "onFling: maxX = " + maxX);
-                    overScroller.fling((int) e1.getX(), (int) e1.getY(), (int) velocityX, (int) velocityY, minX, maxX, minY, maxY);
-                    new Thread(flinger).start();
-                }
+                flinger.start(e1, velocityX, velocityY);
                 return super.onFling(e1, e2, velocityX, velocityY);
             }
 
             @Override
-            public boolean onSingleTapUp(MotionEvent e) {
-                RectF rectF = new RectF();
-                for (int i = 0; i < rows.size(); i++) {
-                    matrix.mapRect(rectF, rows.get(i).getRectF());
-                    if (rectF.contains(lastClickX, lastClickY)) {
-                        for (CellTest cellTest : rows.get(i).cells) {
-                            matrix.mapRect(rectF, cellTest.getRectF());
-                            if (rectF.contains(lastClickX, lastClickY)) {
-                                if (focusedCell != cellTest)
-                                    focusedCell = cellTest;
-                                else
-                                    focusedCell = null;
-                                onClick.onClick(cellTest);
-                                invalidate();
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                }
-                return super.onSingleTapUp(e);
+            public boolean onSingleTapConfirmed(MotionEvent e) {
+                onSigleTap(e);
+                return super.onSingleTapConfirmed(e);
+            }
+
+            @Override
+            public boolean onDoubleTap(MotionEvent e) {
+                if (getMatrixScaleX() == 1f)
+                    matrix.setScale(defaultScaleValue, defaultScaleValue);
+                else
+                    matrix.postScale(1f / getMatrixScaleX(), 1f / getMatrixScaleX());
+                invalidate();
+                return super.onDoubleTap(e);
             }
         });
 
         scaleGestureDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.OnScaleGestureListener() {
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
-                matrix.postScale(detector.getScaleFactor(), detector.getScaleFactor(), detector.getCurrentSpanX(), detector.getCurrentSpanY());
+                matrix.postScale(detector.getScaleFactor(), detector.getScaleFactor(), detector.getFocusX(), detector.getFocusY());
                 invalidate();
                 return true;
             }
@@ -341,62 +343,211 @@ public class MatrixTestView extends View {
         initial(context);
     }
 
-    private void drawFocusCell(Canvas canvas) {
-        int offset = 20;
-        if (focusedCell != null) {
-            RectF rowRectF = rows.get(focusedCell.row).getRectF();
-            cellBgPaint.setColor(Color.RED);
-            canvas.drawRect(rowRectF, cellBgPaint);
-            RectF cellRectF = new RectF(focusedCell.getRectF().left - offset, focusedCell.getRectF().top - offset,
-                    focusedCell.getRectF().right + offset, focusedCell.getRectF().bottom + offset);
-            cellBgPaint.setColor(Color.TRANSPARENT);
-            canvas.drawRect(cellRectF, cellBgPaint);
-            textPaint.setTextSize(textSize * 1.5f);
-            canvas.drawText(focusedCell.value.toString(), cellRectF.centerX(), getBaseLine(cellRectF), textPaint);
+    private boolean isCellVisible(RectF rectF) {
+        return rectF.right > 0 && rectF.left < getWidth();
+    }
+
+    private boolean isRowVisible(RectF rectF) {
+        return rectF.bottom > 0 && rectF.top < getHeight();
+    }
+
+    private void onSigleTap(MotionEvent e) {
+        RectF rectF = new RectF();
+        for (int i = 0; i < rows.size(); i++) {
+            matrix.mapRect(rectF, rows.get(i).getRectF());
+            if (rectF.contains(lastClickX, lastClickY)) {
+                for (CellTest cellTest : rows.get(i).cells) {
+                    matrix.mapRect(rectF, cellTest.getRectF());
+                    if (rectF.contains(lastClickX, lastClickY)) {
+                        if (focusedCell != cellTest)
+                            focusedCell = cellTest;
+                        else
+                            focusedCell = null;
+                        onClick.onClick(cellTest);
+                        invalidate();
+                        break;
+                    }
+                }
+                break;
+            }
         }
     }
 
-    private void drawHeader(Canvas canvas){
-        RowTest rowTest = rows.get(0);
-        RectF rectF = getMatrixRectf(rowTest.getRectF());
-        rectF.set(rectF.left,0,rectF.right,50 * getMatrixScaleX());
-        canvas.drawRect(rectF,numberBgPaint);
-        for(int i = 1;i<= rowTest.columnCount;i++){
-            textPaint.setTextSize(textSize * getMatrixScaleX());
-            String s = "第 "+i +" 列";
-            RectF cellRectF = getMatrixRectf(rowTest.getCell(i - 1).rectF);
-            cellRectF.set(cellRectF.left,0,cellRectF.right,50 * getMatrixScaleX());
-            canvas.drawText(s,cellRectF.centerX(),getBaseLine(cellRectF),textPaint);
-        }
+    private float[] computeScrollRange() {
+        float[] floats = new float[2];
+        floats[0] = contentWidth * getMatrixScaleX() - getWidth();
+        if (floats[0] < 0)
+            floats[0] = 0;
+
+        floats[1] = contentHeight * getMatrixScaleY() - getHeight();
+        if (floats[1] < 0)
+            floats[1] = 0;
+        return floats;
     }
 
-    private void drawRowNumber(Canvas canvas) {
-        int i = 1;
-        for (RectF rectF1:numbers) {
-            RectF rectF = getMatrixRectf(rectF1);
-            rectF.set(0,rectF.top,rowMargin *1.5f* getMatrixScaleX(),rectF.bottom);
+    private void contraintScoll(float dx, float dy) {
+        if (rows.isEmpty())
+            return;
+        float leftEdge = rowMargin * getMatrixScaleX(),
+                topEdge = header.getHeight() * getMatrixScaleY(),
+                rightEdge = getWidth() - rowMargin * getMatrixScaleX(),
+                bottomEdge = getHeight() - rowMargin * getMatrixScaleY();
+        RectF firstRow = getMatrixRectf(rows.get(0).rectF);
+        RectF lastRow = getMatrixRectf(rows.get(rows.size() - 1).rectF);
 
-            canvas.drawRect(rectF, numberBgPaint);
-            textPaint.setTextSize(textSize * getMatrixScaleX());
-            canvas.drawText(String.valueOf(i++), rectF.centerX(), getBaseLine(rectF), textPaint);
+        if (dx > 0 && firstRow.left + dx > leftEdge) {
+            dx = leftEdge - firstRow.left;
+        } else if (dx < 0) {
+            if (firstRow.right < rightEdge) {
+                dx = 0;
+            } else if (firstRow.right + dx < rightEdge) {
+                dx = rightEdge - firstRow.right;
+            }
         }
-//        float top = 0;
-//        float bottom = 0;
-//        float left = 0;
-//        float right =left + rowMargin * 2 * getScaleX();
-//        for(int j = 1;j<=rows.size();j++){
-//            RectF rowRectF =getMatrixRectf(rows.get(j - 1).getRectF());
-//            top = rowRectF.top;
-//            bottom = rowRectF.bottom;
-//
-//            RectF rectF = new RectF(left,top,right,bottom);
-//            canvas.drawRect(rectF, numberBgPaint);
-//
-//            textPaint.setTextSize(textSize * getScaleX());
-//            canvas.drawText(String.valueOf(j), rectF.centerX(), getBaseLine(rectF), textPaint);
+
+        if (dy > 0 && firstRow.top + dy > topEdge) {
+            dy = topEdge - firstRow.top;
+        } else if (dy < 0) {
+            if (lastRow.bottom < bottomEdge) {
+                dy = 0;
+            } else if (lastRow.bottom + dy < bottomEdge) {
+                dy = bottomEdge - lastRow.bottom;
+            }
+        }
+
+        matrix.postTranslate(dx, dy);
+        invalidate();
+    }
+
+//    private void drawFocusCell(Canvas canvas) {
+//        if (focusedCell != null) {
+//            RectF rectF = focusedCell.getRectF();
+//            canvas.drawRect(rectF, cellBgPaint);
+//            textPaint.setTextSize(textSize * 1.5f);
+//            textPaint.setStrokeWidth(5f);
+//            canvas.drawText(focusedCell.value.toString(), rectF.centerX(), getBaseLine(rectF), textPaint);
 //        }
+//    }
+
+    private void drawFixedColumn(int index, Canvas canvas) {
+        if (rows.isEmpty() || index < 0 || index >= rows.get(0).columnCount)
+            return;
+        RectF rectF = getMatrixRectf(rows.get(0).getCell(index).rectF);
+        float top = header.height * getMatrixScaleY();
+        if (rectF.left < - 10) {
+            numberBgPaint.setColor(getResources().getColor(R.color.colorAccent, null));
+            canvas.drawRect(0, top, rectF.width(), getHeight() - indicatorWidth, numberBgPaint);
+
+            textPaint.setTextSize(textSize * getMatrixScaleX());
+            textPaint.setStrokeWidth(2f);
+            for (RowTest rowTest : rows) {
+                CellTest cellTest1 = rowTest.getCell(index);
+                RectF rectF1 = getMatrixRectf(cellTest1.getRectF());
+                if (rectF1.bottom > top && rectF1.top < getHeight() - indicatorWidth) {
+                    rectF1.offsetTo(0, rectF1.top);
+                    canvas.drawLine(rectF1.left, rectF1.bottom + rowMargin * getMatrixScaleY() / 2, rectF1.right, rectF1.bottom + rowMargin * getMatrixScaleY() / 2, textPaint);
+                    canvas.drawText(cellTest1.value.toString(), rectF1.centerX(), getBaseLine(rectF1), textPaint);
+                }
+            }
+            numberBgPaint.setColor(getResources().getColor(R.color.colorHeaderBg, null));
+            RectF rectF2 = new RectF(0, 0, rectF.width() + 2, top);
+            canvas.drawRect(rectF2, numberBgPaint);
+            canvas.drawText(header.getCell(index).value.toString(), rectF2.centerX(), getBaseLine(rectF2), textPaint);
+        }
     }
 
+    private void drawHeader(Canvas canvas) {
+        RectF rectF = getMatrixRectf(header.getRectF());
+        rectF.set(rectF.left, 0, rectF.right, rectF.height());
+        textPaint.setTextSize(textSize * getMatrixScaleX());
+        textPaint.setStrokeWidth(5f);
+        numberBgPaint.setColor(getResources().getColor(R.color.colorHeaderBg, null));
+        canvas.drawRect(rectF, numberBgPaint);
+        for (int i = 0; i < header.columnCount; i++) {
+            RectF cellRectF = getMatrixRectf(header.getCell(i).rectF);
+            cellRectF.set(cellRectF.left, rectF.top, cellRectF.right, rectF.bottom);
+            canvas.drawText(header.getCell(i).value.toString(), cellRectF.centerX(), getBaseLine(cellRectF), textPaint);
+        }
+    }
+
+    private void drawIndicator(Canvas canvas) {
+        if (rows.isEmpty())
+            return;
+        numberBgPaint.setColor(getResources().getColor(R.color.colorIndicatorBg, null));
+        cellBgPaint.setColor(getResources().getColor(R.color.colorIndicator, null));
+        cellBgPaint.setStyle(Paint.Style.FILL);
+        RectF first = getMatrixRectf(rows.get(0).rectF);
+
+        float[] ranges = computeScrollRange();
+
+        if (ranges[0] > 0) {
+            hIndicatorBg.set(0, getHeight() - indicatorWidth, getWidth() - indicatorWidth, getHeight());
+            float scaleX = getWidth() / (contentWidth * getMatrixScaleX());
+            float indicatorSize = getWidth() * scaleX;
+            float left = (hIndicatorBg.width() - indicatorSize) * Math.abs(first.left > 0 ? 0 : first.left) / ranges[0];
+            hIndicator.set(left, getHeight() - indicatorWidth, left + indicatorSize, getHeight());
+            canvas.drawRect(hIndicatorBg, numberBgPaint);
+            canvas.drawRect(hIndicator, cellBgPaint);
+        }
+
+        if (ranges[1] > 0) {
+            vIndicatorBg.set(getWidth() - indicatorWidth, 0, getWidth(), getHeight());
+            float scaleY = getHeight() / (contentHeight * getMatrixScaleX());
+            float indicatorSize = getHeight() * scaleY;
+            float top = (vIndicatorBg.height() - indicatorSize) * Math.abs(first.top > 0 ? 0 : first.top) / ranges[1];
+            vIndicator.set(getWidth() - indicatorWidth, top, getWidth(), top + indicatorSize);
+            canvas.drawRect(vIndicatorBg, numberBgPaint);
+            canvas.drawRect(vIndicator, cellBgPaint);
+        }
+    }
+
+    private void drawCell(CellTest cellTest, Canvas canvas) {
+        cellBgPaint.setColor(Color.WHITE);
+        canvas.drawRect(cellTest.rectF, cellBgPaint);
+        textPaint.setTextSize(cellTest == focusedCell ? textSize * 1.3f : textSize);
+        textPaint.setStrokeWidth(cellTest == focusedCell ? 5f : 2f);
+        canvas.drawText(cellTest.value.toString(), cellTest.rectF.centerX(), getBaseLine(cellTest.rectF), textPaint);
+    }
+
+    private void drawLines(Canvas canvas) {
+        if (rows.isEmpty())
+            return;
+        RowTest firstRow = rows.get(0);
+        RectF rowRectF = getMatrixRectf(firstRow.getRectF());
+        RectF lastRowRectF = getMatrixRectf(rows.get(rows.size() - 1).getRectF());
+        textPaint.setStrokeWidth(2f);
+        float rowOffset = rowMargin * getMatrixScaleX() / 2f;
+        float hLineStartX = rowRectF.left;
+        float hLineEndX = rowRectF.right;
+
+        float cellOffset = cellMargin * getMatrixScaleX() / 2f;
+        float vLineStartY = rowRectF.top - rowOffset;
+        float vLineEndY = lastRowRectF.bottom + rowOffset;
+
+        for (RowTest rowTest : rows) {
+            RectF rectF = getMatrixRectf(rowTest.getRectF());
+            if (isRowVisible(rectF)) {
+                float startX = Math.max(0, hLineStartX);
+                float endX = Math.min(getWidth(), hLineEndX);
+                float y = rectF.bottom + rowOffset;
+                if (rowTest.row == 0)
+                    canvas.drawLine(startX, vLineStartY, endX, vLineStartY, textPaint);
+                canvas.drawLine(startX, y, endX, y, textPaint);
+            }
+        }
+
+        for (CellTest cellTest : firstRow.cells) {
+            RectF rectF = getMatrixRectf(cellTest.getRectF());
+            float x = cellTest.column == (firstRow.columnCount - 1) ? hLineEndX : rectF.right + cellOffset;
+            float startY = Math.max(0, vLineStartY);
+            float endY = Math.min(getHeight(), vLineEndY);
+            if (isCellVisible(rectF)) {
+                if (cellTest.column == 0)
+                    canvas.drawLine(hLineStartX, vLineStartY, hLineStartX, vLineEndY, textPaint);
+                canvas.drawLine(x, startY, x, endY, textPaint);
+            }
+        }
+    }
 
     @Override
     protected void onDraw(Canvas canvas) {
@@ -406,19 +557,19 @@ public class MatrixTestView extends View {
         canvas.save();
         canvas.concat(matrix);
         for (RowTest rowTest : rows) {
-            for (CellTest cellTest : rowTest.cells) {
-                if (cellTest == focusedCell)
-                    continue;
-                cellBgPaint.setColor(Color.BLUE);
-                canvas.drawRect(cellTest.rectF, cellBgPaint);
-                textPaint.setTextSize(textSize);
-                canvas.drawText(cellTest.value.toString(), cellTest.rectF.centerX(), getBaseLine(cellTest.rectF), textPaint);
+            if (isRowVisible(getMatrixRectf(rowTest.getRectF()))) {
+                for (CellTest cellTest : rowTest.cells) {
+                    if (isCellVisible(getMatrixRectf(cellTest.getRectF()))) {
+                        drawCell(cellTest, canvas);
+                    }
+                }
             }
         }
-        drawFocusCell(canvas);
         canvas.restore();
-        drawRowNumber(canvas);
+        drawLines(canvas);
         drawHeader(canvas);
+        drawFixedColumn(0, canvas);
+        drawIndicator(canvas);
     }
 
     @Override
