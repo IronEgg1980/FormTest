@@ -68,10 +68,19 @@ public class MainActivity2 extends AppCompatActivity {
                 MyFormView.Cell cell = myFormView.getCurrentCell();
                 if(cell!=null){
                     cell.value = UUID.randomUUID().toString();
-                    if(cell.getColumnIndex() == 0)
-                        myFormView.setCurrentCell(cell.getRowIndex() + 1,0);
-                    else
-                        myFormView.setCurrentCell(cell.getRowIndex(),cell.getColumnIndex() + 1);
+                    if(cell.getColumnIndex() == 0) {
+                        if(cell.getRowIndex() == myFormView.getRowCount() - 1){
+                            myFormView.newRow();
+                            myFormView.scrollToBottom();
+                        }
+                        myFormView.setCurrentCell(cell.getRowIndex() + 1, 0);
+                    }else {
+                        if(cell.getColumnIndex() == myFormView.getColumnsCount() - 1 && cell.getRowIndex() < myFormView.getRowCount() - 1){
+                            myFormView.setCurrentCell(cell.getRowIndex() + 1,1);
+                        }else {
+                            myFormView.setCurrentCell(cell.getRowIndex(), cell.getColumnIndex() + 1);
+                        }
+                    }
                 }
             }
         });
