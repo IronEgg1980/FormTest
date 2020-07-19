@@ -14,7 +14,6 @@ import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.AttributeSet;
-import android.util.Log;
 import android.util.SparseIntArray;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -32,7 +31,6 @@ import androidx.annotation.Nullable;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAdjusters;
 import java.time.temporal.WeekFields;
 import java.util.ArrayList;
@@ -41,10 +39,12 @@ import java.util.Locale;
 
 public class MyFormView extends View {
     private static final String TAG = "殷宗旺";
+    // 数据
+    private List dataList;
+    private IBindData bindDataListener;
 
     // 标记
     private boolean isFirstDraw = true;
-    private boolean showFixedColumn = false;
     private float defaultScaleValue = 1f;
     private float lastClickX, lastClickY;
     private float[] m = new float[9]; // 记录matrix的值
@@ -57,11 +57,13 @@ public class MyFormView extends View {
     private float titleTextSize = 150;
     private int rowHeight = 200;
     private int indicatorWidth = 10;
+    private int numberBarWidth = 40;
 
     // 自定义的文本或颜色，其他
     private String mTitle = "标题";
     private LocalDate startDay;
     private int weekOfYear;
+    private int backgroundColor = Color.parseColor("#efefef");
     private int columnsCount = 9;
     private int hearBgColor = getResources().getColor(R.color.colorHeaderBg, null);
     private int lineColor = Color.GRAY;
@@ -205,6 +207,47 @@ public class MyFormView extends View {
         });
     }
 
+    public void setDataSet(@NonNull List list, @NonNull IBindData bindDataListener) {
+        this.dataList = list;
+        this.bindDataListener = bindDataListener;
+        notifyDataSetChanged();
+    }
+
+    public void notifyDataSetChanged() {
+        if (dataList == null || bindDataListener == null)
+            return;
+
+        rows.clear();
+        for (int i = 0; i < dataList.size(); i++) {
+            Row row = addRow();
+            bindDataListener.onBindData(row);
+        }
+        invalidate();
+    }
+
+    public void notifyDataAdd() {
+        if (dataList == null || bindDataListener == null)
+            return;
+        int currentDataSize = rows.size();
+        for (int i = currentDataSize; i < dataList.size(); i++) {
+            Row row = addRow();
+            bindDataListener.onBindData(row);
+        }
+        invalidate();
+    }
+
+    public void notifyDataDele() {
+        playDeleRowAnimator();
+    }
+
+    public void setColumnVisible(int columnIndex, boolean isShown) {
+        header.setCellVisible(columnIndex,isShown);
+        for (Row row : rows)
+            row.setCellVisible(columnIndex,isShown);
+        title.width = header.width;
+        invalidate();
+    }
+
     private int getContentWidth() {
         return header == null ? 0 : header.width;
     }
@@ -245,11 +288,7 @@ public class MyFormView extends View {
         this.onClick = onClick;
     }
 
-    public void showFixedColumn(boolean show) {
-        this.showFixedColumn = show;
-    }
-
-    public Row newRow() {
+    private Row addRow() {
         final Row row = new Row(rows.size(), rowHeight, columnsCount, new SparseIntArray());
         rows.add(row);
         if (addRowAnimator.isRunning()) {
@@ -279,14 +318,11 @@ public class MyFormView extends View {
         return row;
     }
 
-    public void deleRow(final int rowIndex) {
-        if (rowIndex < 0 || rowIndex > rows.size() - 1) {
+    private void playDeleRowAnimator() {
+        if (focusedCell == null || removeRowAnimator.isRunning()) {
             return;
         }
-        final Row row = rows.get(rowIndex);
-        if (removeRowAnimator.isRunning()) {
-            removeRowAnimator.cancel();
-        }
+        final Row row = rows.get(focusedCell.getRowIndex());
         removeRowAnimator.removeAllListeners();
         removeRowAnimator.removeAllUpdateListeners();
         removeRowAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
@@ -300,18 +336,19 @@ public class MyFormView extends View {
 
             @Override
             public void onAnimationCancel(Animator animation) {
-                removeRow(rowIndex);
+                removeRow(focusedCell.getRowIndex());
             }
 
             @Override
             public void onAnimationEnd(Animator animation) {
-                removeRow(rowIndex);
+                removeRow(focusedCell.getRowIndex());
             }
         });
         removeRowAnimator.start();
     }
 
     private void removeRow(int rowIndex) {
+        dataList.remove(rowIndex);
         rows.remove(rowIndex);
         for (int i = rowIndex; i < rows.size(); i++) {
             rows.get(i).rowIndex = i;
@@ -403,7 +440,7 @@ public class MyFormView extends View {
         RectF tempRectF = computeEdges(cell);
 
         if (tempRectF.left < 0) {
-            dx = (int) (0 - tempRectF.left);
+            dx = (int) (numberBarWidth - tempRectF.left);
         }
         if (tempRectF.right > getWidth() - indicatorWidth) {
             dx = (int) (getWidth() - indicatorWidth - tempRectF.right);
@@ -442,6 +479,8 @@ public class MyFormView extends View {
             return;
         float width = e.getX() - getTranslateX();
         for (Cell cell : rows.get(index).cells) {
+            if(!cell.isShown)
+                continue;
             width -= cell.width * getMatrixScaleX();
             if (width <= 0) {
                 if (focusedCell != cell)
@@ -497,70 +536,39 @@ public class MyFormView extends View {
         invalidate();
     }
 
-    private void drawFixedColumn(int index, Canvas canvas) {
-        if (rows.isEmpty() || index < 0 || index >= rows.get(0).columnCount)
-            return;
-        RectF titleRectF = computeEdges(title);
-        RectF firstRowRectF = computeEdges(rows.get(0).getCell(index));
-        RectF lastRowRectF = computeEdges(rows.get(rows.size() - 1));
-        float top = Math.max(0, titleRectF.bottom);
-        float left = Math.min(0, Math.abs(firstRowRectF.left) - firstRowRectF.width());
-        float bottom = Math.min(getBottom() - indicatorWidth, lastRowRectF.bottom);
-        float right = left + firstRowRectF.width();
-        if (firstRowRectF.left < -mPadding) {
-            bgPaint.setColor(getResources().getColor(R.color.colorAccent, null));
-
-            canvas.drawRect(left, top, right, bottom, bgPaint);
-            textPaint.setTextSize(textSize * getMatrixScaleX());
-            textPaint.setStrokeWidth(2f);
-            for (Row row : rows) {
-                Cell cell = row.getCell(index);
-                RectF rectF = computeEdges(cell);
-                if (rectF.bottom > top && rectF.top < getHeight()) {
-                    rectF.offsetTo(left, rectF.top);
-                    canvas.drawLine(rectF.left, rectF.bottom, rectF.right, rectF.bottom, textPaint);
-                    drawText(canvas, rectF, cell.value.toString());
-                }
-            }
-            bgPaint.setColor(getResources().getColor(R.color.colorHeaderBg, null));
-            RectF rectF2 = new RectF(left, top, right + 2, top + header.height * getMatrixScaleY());
-            canvas.drawRect(rectF2, bgPaint);
-            canvas.drawText(header.getCell(index).value.toString(), rectF2.centerX(), getBaseLine(rectF2.centerY()), textPaint);
-        }
-    }
-
     private void drawHeader(@NonNull Canvas canvas) {
-        RectF tempRectF = computeEdges(header);
-        if (tempRectF.bottom > 0 && tempRectF.top < getHeight()) {
-            float top = Math.max(0, tempRectF.top);
-            float left = tempRectF.left;
-            float right = tempRectF.right;
-            float bottom = top + tempRectF.height();
-            tempRectF.set(left, top, right, bottom);
-            textPaint.setTextSize(textSize * getMatrixScaleX());
+        float top = getTranslateY() + (title.height) * getMatrixScaleY();
+        float left = getTranslateX();
+        float right = left;
+        float bottom = top + header.height * getMatrixScaleY();
+        if (bottom > 0 && top < getHeight()) {
+            top = Math.max(0, top);
+            bottom = top + header.height * getMatrixScaleY();
+            textPaint.setTextSize(textSize * 1.2f * getMatrixScaleX());
             textPaint.setStrokeWidth(6f * getMatrixScaleX());
             bgPaint.setColor(hearBgColor);
-            canvas.drawRect(tempRectF, bgPaint);
-
+            linePaint.setStrokeWidth(3f * getMatrixScaleX());
+            float cellLeft = left;
+            for (int i = 0; i < header.columnCount; i++) {
+                Cell cell = header.getCell(i);
+                if (!cell.isShown)
+                    continue;
+                right = cellLeft + cell.width * getMatrixScaleX();
+                cellRectF.set(cellLeft, top, right, bottom);
+                canvas.drawRect(cellRectF, bgPaint);
+                drawText(canvas, cellRectF, header.getCell(i).value.toString());
+                if (i < header.columnCount - 1)
+                    canvas.drawLine(cellRectF.right, cellRectF.top, cellRectF.right, cellRectF.bottom, linePaint);
+                cellLeft = right;
+            }
             linePaint.setStrokeWidth(6f * getMatrixScaleX());
             canvas.drawLine(left, top, right, top, linePaint);
             canvas.drawLine(left, top, left, bottom, linePaint);
             canvas.drawLine(right, top, right, bottom, linePaint);
+
             linePaint.setStrokeWidth(rows.isEmpty() ? 6f * getMatrixScaleX() : 3f * getMatrixScaleX());
             canvas.drawLine(left, bottom, right, bottom, linePaint);
-            linePaint.setStrokeWidth(3f * getMatrixScaleX());
-            float cellLeft = left;
-            float cellRight;
-            for (int i = 0; i < header.columnCount; i++) {
-                Cell cell = header.getCell(i);
-                cellRight = cellLeft + cell.width * getMatrixScaleX();
-                tempRectF.set(cellLeft, top, cellRight, bottom);
-                drawText(canvas, tempRectF, header.getCell(i).value.toString());
-                if (i < header.columnCount - 1)
-                    canvas.drawLine(tempRectF.right, tempRectF.top, tempRectF.right, tempRectF.bottom, linePaint);
-                cellLeft = cellRight;
-            }
-
+            drawNumberBar(canvas, top, header.height, "", false);
         }
     }
 
@@ -598,15 +606,16 @@ public class MyFormView extends View {
         bgPaint.setColor(cellBgColor);
         for (Row row : rows) {
             float left = getTranslateX();
-            float right = left + row.width * getMatrixScaleX();
+            float right = left;
             bottom = top + row.height * getMatrixScaleY();
             if (bottom > 0 && top < getHeight()) {
                 float cellLeft = left;
-                float cellRight;
                 for (Cell cell : row.cells) {
-                    cellRight = cellLeft + cell.width * getMatrixScaleX();
-                    cellRectF.set(cellLeft, top, cellRight, bottom);
-                    if (cellRight > 0 && cellLeft < getWidth()) {
+                    if (!cell.isShown)
+                        continue;
+                    right = cellLeft + cell.width * getMatrixScaleX();
+                    cellRectF.set(cellLeft, top, right, bottom);
+                    if (right > 0 && cellLeft < getWidth()) {
                         bgPaint.setColor(cellBgColor);
                         textPaint.setTextSize(cell == focusedCell ? textSize * 1.3f * getMatrixScaleX() : textSize * getMatrixScaleX());
                         textPaint.setStrokeWidth(cell == focusedCell ? 6f * getMatrixScaleX() : 3f * getMatrixScaleX());
@@ -619,23 +628,29 @@ public class MyFormView extends View {
                             canvas.drawRoundRect(cellRectF, radius, radius, bgPaint);
                         }
                         if (cell.getColumnIndex() < row.columnCount - 1) {
-                            canvas.drawLine(cellRight, top, cellRight, bottom, linePaint);
+                            canvas.drawLine(right, top, right, bottom, linePaint);
                         }
                         drawText(canvas, cellRectF, cell.value.toString());
                     }
-                    cellLeft = cellRight;
+                    cellLeft = right;
                 }
                 linePaint.setStrokeWidth(6f * getMatrixScaleX());
                 canvas.drawLine(left, top, left, bottom, linePaint);
                 canvas.drawLine(right, top, right, bottom, linePaint);
+
                 linePaint.setStrokeWidth(row.rowIndex == rows.size() - 1 ? 6f * getMatrixScaleX() : 3f * getMatrixScaleX());
                 canvas.drawLine(left, bottom, right, bottom, linePaint);
+                String text = String.valueOf(row.rowIndex + 1);
+                boolean b = focusedCell != null && focusedCell.getRowIndex() == row.rowIndex;
+                drawNumberBar(canvas, top, row.height, text, b);
             }
             top = bottom;
         }
     }
 
     private void drawText(Canvas canvas, RectF rectF, CharSequence text) {
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setColor(Color.BLACK);
         float cellPadding = 25 * getMatrixScaleX();
         int width = (int) (rectF.width() - cellPadding * 2);
         StaticLayout.Builder builder = StaticLayout.Builder.obtain(text, 0, text.length(), textPaint, width);
@@ -648,56 +663,24 @@ public class MyFormView extends View {
         float dy = rectF.top + (rectF.height() - staticLayout.getHeight()) / 2;
         if (rectF.height() > staticLayout.getHeight()) {
             canvas.save();
-            canvas.translate(dx,dy);
+            canvas.translate(dx, dy);
             staticLayout.draw(canvas);
             canvas.restore();
         }
     }
 
-//    private void drawLines(@NonNull Canvas canvas) {
-//        RectF rectF = computeEdges(header);
-//        float startX = rectF.left;
-//        float endX = rectF.right;
-//        float startY = rectF.top;
-//        float endY = rows.isEmpty() ? rectF.bottom : computeEdges(rows.get(rows.size() - 1)).bottom;
-//
-//        float x1 = Math.max(0, startX);
-//        float x2 = Math.min(getWidth(), endX);
-//        float y1 = Math.max(0, startY);
-//        float y2 = Math.min(getHeight(), endY);
-//
-//        bgPaint.setColor(Color.GRAY);
-//        bgPaint.setStrokeWidth(6f * getMatrixScaleX());
-//        if (startY >= 0) {
-//            canvas.drawLine(x1, startY, x2, startY, bgPaint);
-//        }
-//        if (endY < getHeight()) {
-//            canvas.drawLine(x1, endY, x2, endY, bgPaint);
-//        }
-//        if (startX >= 0) {
-//            canvas.drawLine(startX, y1, startX, y2, bgPaint);
-//        }
-//        if (endX < getWidth()) {
-//            canvas.drawLine(endX, y1, endX, y2, bgPaint);
-//        }
-//
-//        bgPaint.setStrokeWidth(3f * getMatrixScaleX());
-//        float totalRowHeight = 0;
-//        for (Row row : rows) {
-//            float y = getTranslateY() + (mTitleHeight + header.height + totalRowHeight) * getMatrixScaleY();
-//            if (y > 0 && y < getHeight())
-//                canvas.drawLine(x1, y, x2, y, bgPaint);
-//            totalRowHeight += row.height;
-//        }
-//        float right = startX;
-//
-//        for (int i = 1; i < header.columnCount; i++) {
-//            Cell cell = header.getCell(i);
-//            right += cell.width * getMatrixScaleX();
-//            if (right > 0 && right < getWidth())
-//                canvas.drawLine(right, y1, right, y2, bgPaint);
-//        }
-//    }
+    private void drawNumberBar(Canvas canvas, float top, float height, String text, boolean isFocusedRow) {
+        float numberBarLeft = 0;
+        float nuberBarRight = numberBarLeft + numberBarWidth * getMatrixScaleX();
+        float centerX = numberBarLeft + numberBarWidth * getMatrixScaleX() / 2;
+        float centerY = top + height * getMatrixScaleY() / 2;
+        float bottom = top + height * getMatrixScaleY();
+        bgPaint.setColor(isFocusedRow ? cellFocusedColor : backgroundColor);
+        canvas.drawRect(numberBarLeft, top, nuberBarRight, bottom, bgPaint);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        text = isFocusedRow ? ">>" : text;
+        canvas.drawText(text, centerX, getBaseLine(centerY), textPaint);
+    }
 
     private void drawTitle(@NonNull Canvas canvas) {
         bgPaint.setColor(Color.WHITE);
@@ -715,12 +698,10 @@ public class MyFormView extends View {
         super.onDraw(canvas);
         if (isFirstDraw)
             firstDraw();
-        canvas.drawColor(Color.parseColor("#efefef"));
+        canvas.drawColor(backgroundColor);
         drawTitle(canvas);
         drawCells(canvas);
         drawHeader(canvas);
-        if (showFixedColumn)
-            drawFixedColumn(0, canvas);
         drawIndicator(canvas);
     }
 
@@ -759,6 +740,10 @@ public class MyFormView extends View {
         initial(context);
     }
 
+    public interface IBindData {
+        void onBindData(Row row);
+    }
+
     //定义 Cell点击接口
     public interface OnClick {
         void onClick(Cell cell);
@@ -788,6 +773,17 @@ public class MyFormView extends View {
             }
         }
 
+        public void setCellVisible(int index, boolean isShown) {
+            if (index < 0 || index > columnCount - 1)
+                return;
+            Cell cell = getCell(index);
+            if (cell.isShown != isShown) {
+                int dx = isShown ? cell.width : -cell.width;
+                width += dx;
+                cell.isShown = isShown;
+            }
+        }
+
         public Cell getCell(int index) {
             return cells[index];
         }
@@ -798,6 +794,7 @@ public class MyFormView extends View {
         private Row row;
         private int columnIndex;
         public int width, height;
+        public boolean isShown = true;
         public Object value = "";
 
         public int getColumnIndex() {
